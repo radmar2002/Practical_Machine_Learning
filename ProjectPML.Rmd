@@ -1,0 +1,321 @@
+========================================================
+Practical Machine Learning - Coursera Project
+========================================================
+<p>Marius Florin RADU
+<br>Cluj-Napoca, Cluj, ROMANIA
+<br>mail: radu_marius_florin@yahoo.com</p>
+========================================================
+
+
+Background
+------------------------------------------------------------
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har) See the section on the Weight Lifting Exercise Dataset. 
+
+
+Data 
+------------------------------------------------------------
+The training data for this project are available [HERE](ttps://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+The test data are available [HERE](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+The data for this project come from this [SOURCE](http://groupware.les.inf.puc-rio.br/har). If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment. 
+
+The Project Goal
+------------------------------------------------------------
+The goal of your project is to predict the manner in which they did the exercise. This is the **classe** variable in the training set. You may use any of the other variables to predict with. 
+You should create a report describing:
+- how you built your model 
+- how you used cross validation 
+- what you think the expected out of sample error is 
+- why you made the choices you did 
+
+You will also use your prediction model to predict 20 different test cases. 
+
+
+The Approach
+------------------------------------------------------------
+**How you built your model?**
+
+I’ve used **carret** package to built machine learning algorithm to predict activity quality from activity monitors.
+I used Random Forest approach in a similar manner as did the authors of the main article associated with this data set ( in section 5.2 in the paper [HERE](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf) ) Probably authors have been tested also other models and get happy with the results when using Random Forest. 
+In an initial phase I’ve also tested Generalized Additive Model using Splines and Support Vector Machines with Polynomial Kernel Model from carret package, but for the final machine and the documentation bellow I’ve opted to keep only Random Forest models. The motivations are: **gam** and **svmPoly** are quite time/resources consuming (even if I’ve used parallel processing), and the results are comparable with **rf** which is relative faster.  
+
+**How you used cross validation?** 
+
+I’ve created a training set from `pml-training.csv` with 4907 instances (25% from file) ant the remaining set was used for cross-validation. Model was used to classify data from `pml-training.csv`.
+
+**What you think the expected out of sample error is?** 
+
+From the very beginning I expected for model (any to by finally adopted) an error rate less than 0.5% in test sample; a value which is close to the results presented in the main article.
+
+**Why you made the choices you did?**
+
+Bellow is what I did, decisions and the motivations. 
+
+Phase 01 - Exploratory Analysis and Data Preparation
+------------------------------------------------------------
+```{r}
+rm(list=ls())
+setwd("D:/WORK_2014/Certification_Data_Science/Practical_Machine_Learning/Course_Project_Writeup/Data/")
+list.files()
+
+library(caret)
+
+dataRaw <- read.table("pml-training.csv", header=TRUE, nrows = 19622, 
+                      sep = ",", comment.char="", na.strings=c("", "NA","#DIV/0!"))
+
+str(dataRaw)
+```
+
+
+Discard NAs columns from data set
+```{r}
+dataNoNA <- subset(dataRaw, select=colMeans(is.na(dataRaw)) == 0)
+```
+
+
+Check data structure. Check missing data from the new No NA data set. Credits to `Stephen Turner` on **GitHub** for **propmiss** function bellow
+```{r}
+dim(dataNoNA)
+
+propmiss <- function(dataframe) {
+        m <- sapply(dataframe, function(x) {
+                data.frame(
+                        nmiss=sum(is.na(x)),
+                        n=length(x),
+                        propmiss=sum(is.na(x))/length(x)
+                )
+        })
+        d <- data.frame(t(m))
+        d <- sapply(d, unlist)
+        d <- as.data.frame(d)
+        d$variable <- row.names(d)
+        row.names(d) <- NULL
+        d <- cbind(d[ncol(d)],d[-ncol(d)])
+        return(d[order(d$propmiss), ])
+}
+
+pm1 <- propmiss(dataRaw)
+pm2 <- propmiss(dataNoNA)
+```
+
+
+Check in detail the structure of certain variables: `user_name`, `X`
+```{r}
+table(dataNoNA$user_name)
+#str(dataNoNA$X)
+```
+
+This is bellow only one of the plots I've used in exploratory phase. The value of this kind plots consists in a better understanding of data and problem.
+```{r fig.width=10, fig.height=10}
+library(gridExtra)
+p1 <- qplot(accel_belt_x,colour=user_name,data=dataNoNA,geom="density")
+p2 <- qplot(accel_belt_y,colour=user_name,data=dataNoNA,geom="density")
+p3 <- qplot(accel_belt_z,colour=user_name,data=dataNoNA,geom="density")
+grid.arrange(p1,p2,p3,nrow=3)
+```
+
+Eliminate timestam variable `cvtd_timestamp`, this is a factor variable which is already captured by other avriables: `raw_timestamp_part_1` and `raw_timestamp_part_2`. This variable might work as a predictor, but it would have no real ML case utility.
+```{r}
+dataNoNANoTS <-dataNoNA[, -c(5)]
+#str(dataNoNANoTS)
+```
+
+
+Create dummy variables from factor variables
+
+```{r}
+head(model.matrix(classe ~ ., data = dataNoNANoTS),2)
+dummies <- dummyVars(classe ~ ., data = dataNoNANoTS)
+#head(predict(dummies, newdata = dataNoNANoTS))
+dataFrame01 <- data.frame(predict(dummies, newdata = dataNoNANoTS))
+#head(dataFrame01)
+#str(dataFrame01)
+```
+
+
+Determine and eliminate Zero- and Near Zero-Variance Predictors
+```{r}
+nzv <- nearZeroVar(dataFrame01, saveMetrics = TRUE)
+nzv[nzv$nzv, ]
+
+#str(dataFrame01)
+dataFrame02 <- dataFrame01[,-c(10,11)]
+#str(dataFrame02)
+```
+
+
+Check for Linera Dependencies
+```{r}
+comboInfo <- findLinearCombos(dataFrame02)
+#comboInfo
+#str(dataFrame02)
+names(dataFrame02)[8]
+```
+
+
+Due to linear dependency will eliminate column `raw_timestamp_part_1`. Also  do not include the row number X in the predictors.
+```{r}
+dataFrame03 <- dataFrame02[,-c(1,8)]
+#str(dataFrame03)
+#names(dataFrame03)
+```
+
+
+Construct the main data frame containing predicted variable "classe"
+```{r}
+dataFrame04 <- data.frame(dataFrame03, classe=dataNoNANoTS$classe)
+#names(dataFrame04)
+#summary(dataFrame04)
+
+```
+
+Phase 02 - ML Model Construction
+------------------------------------------------------------
+```{r}
+set.seed(1978)
+inTraining <- createDataPartition(dataFrame04$classe, p = 0.25, list = FALSE)
+training <- dataFrame04[inTraining, ]
+testing <- dataFrame04[-inTraining, ]
+
+dim(training)
+dim(testing)
+```
+
+Parameter Tuning: We will split your data 10-fold and perform cross-validation as it trains the model.
+```{r}
+# Version 1
+fitControl <- trainControl(
+        method = "repeatedcv",
+        number = 10,
+        repeats = 10, 
+        classProbs=TRUE, 
+        savePred=T)
+
+# Version 2
+fitControl <- trainControl(
+        method = "cv",              
+        number = 10,        
+        classProbs=TRUE, 
+        savePred=T)
+```
+
+
+Parallel Processing Set Up with Snow and Model fitting with Random Forest
+We use scaled and centered training data
+
+```{r}
+library(doSNOW)
+library(foreach)
+library(caret)
+
+cl <- makeCluster(3)
+registerDoSNOW(cl)
+
+rfFit <- train(classe ~ ., data = training,
+                method = "rf",
+                trControl = fitControl,
+                preProc = c("center", "scale"),   
+                allowParallel=TRUE)
+                
+
+stopCluster(cl)
+```
+
+
+Find time elapsed for the model
+```{r}
+rfFit$times
+```
+
+Print final model
+```{r}
+print(rfFit$finalModel)
+```
+
+Test Prediction
+-------------------------------------------------------------
+```{r}
+predictionsTraining <- predict(rfFit,training)
+confusionMatrix(predictionsTraining,training$classe)
+
+predictionsTesting <- predict(rfFit,newdata=testing)
+confusionMatrix(predictionsTesting,testing$classe)
+
+## We have the model accuracy
+confusionMatrix(predictionsTesting,testing$classe)$overall   
+```
+
+
+Use the Model for the Practical Exercise
+------------------------------------------------------------
+```{r}
+setwd("D:/WORK_2014/Certification_Data_Science/Practical_Machine_Learning/Course_Project_Writeup/Data/")
+#list.files()
+
+dataRaw <- read.table("pml-training.csv", header=TRUE, nrows = 19622, 
+                      sep = ",", comment.char="", na.strings=c("", "NA","#DIV/0!"))
+
+dataRawTest <- read.table("pml-testing.csv", header=TRUE, nrows = 19622, 
+                      sep = ",", comment.char="", na.strings=c("", "NA","#DIV/0!"))
+
+#intersect(names(dataRaw),names(dataRawTest))
+setdiff(names(dataRaw),names(dataRawTest))
+setdiff(names(dataRawTest),names(dataRaw))
+
+names(dataRawTest)[160]
+names(dataRawTest)[160] <- "classe"
+dataRawTest$classe <- NA
+
+dataRaw$Set <- 1
+dataRawTest$Set <- 2
+
+allDataRaw <- rbind(dataRaw,dataRawTest)
+```
+
+Discard NAs columns from data set
+```{r}
+dataNoNA <- dataRaw[,colSums(is.na(dataRaw)) == 0 ]
+dataNoNA <- subset(allDataRaw, select=colMeans(is.na(dataRaw)) == 0)
+```
+
+Check missing data from the new No NA data set.
+```{r}
+pm3 <- propmiss(dataNoNA)
+
+dataNoNANoTS <-dataNoNA[, -c(5)]
+
+#head(model.matrix(classe ~ ., data = dataNoNANoTS))
+dummies <- dummyVars(classe ~ ., data = dataNoNANoTS)
+#head(predict(dummies, newdata = dataNoNANoTS))
+dataFrame01 <- data.frame(predict(dummies, newdata = dataNoNANoTS))
+
+nzv <- nearZeroVar(dataFrame01, saveMetrics = TRUE)
+nzv[nzv$nzv, ]
+
+#str(dataFrame01)
+dataFrame02 <- dataFrame01[,-c(10,11)]
+#str(dataFrame02)
+
+comboInfo <- findLinearCombos(dataFrame02)
+#comboInfo
+names(dataFrame02)[8]
+
+dataFrame03 <- dataFrame02[,-c(1,8)]
+
+dataFrame04 <- data.frame(dataFrame03, classe=dataNoNANoTS$classe)
+#summary(dataFrame04)
+
+dataFrame05 <- dataFrame04[which(dataFrame04$Set==2),]
+#dim(dataFrame05)
+
+dataFrame06 <- dataFrame05[,-c(62,63)]
+#dim(dataFrame06)
+#summary(dataFrame06)
+
+predictionsExercise <- predict(rfFit,newdata=dataFrame06)
+predictionsExercise
+```
+
+
+
